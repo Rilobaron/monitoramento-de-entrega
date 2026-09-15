@@ -1,0 +1,26 @@
+{
+  "name": "monitoramento-entregas-itu",
+  "version": "2.0.0",
+  "description": "Monitoramento diário de entregas e SLA por motorista",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win portable"
+  },
+  "dependencies": {
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "electron": "^38.1.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "br.com.itu.monitoramentoentregas",
+    "productName": "Monitoramento de Entregas",
+    "asar": false,
+    "compression": "store",
+    "files": ["main.js", "preload.js", "index.html", "renderer.js", "package.json"],
+    "directories": { "output": "dist" },
+    "win": { "target": "portable", "artifactName": "Monitoramento de Entregas.exe", "signAndEditExecutable": false }
+  }
+}

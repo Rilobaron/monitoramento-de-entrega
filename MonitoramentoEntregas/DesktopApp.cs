@@ -15,7 +15,7 @@ namespace MonitoramentoEntregas
 
     internal sealed class DeliveryRecord
     {
-        public string TrackingNumber, Driver;
+        public string TrackingNumber, Driver, BaseName;
         public DateTime DispatchTime;
         public DateTime? ProblemTime, DeliveryTime;
         public DeliveryStatus Status
@@ -52,6 +52,7 @@ namespace MonitoramentoEntregas
                 if (rows.Count == 0) return new List<DeliveryRecord>();
                 Dictionary<string, int> header = ReadRow(rows[0], strings).ToDictionary(p => Normalize(p.Value), p => p.Key);
                 int tracking = FindColumn(header, "numerodepedidojms", "运单编号");
+                int baseColumn = FindColumn(header, "basedeentrega", "派件网点");
                 int dispatch = FindColumn(header, "tempodeentrega", "派件时间");
                 int driver = FindColumn(header, "entregador", "派件员");
                 int problem = FindColumn(header, "horarioregistropacoteproblematico", "问题件时间");
@@ -66,7 +67,7 @@ namespace MonitoramentoEntregas
                     string driverName = Get(cells, driver).Trim();
                     if (driverName.Length == 0) driverName = "SEM MOTORISTA";
                     result.Add(new DeliveryRecord {
-                        TrackingNumber = code, DispatchTime = dispatchDate.Value, Driver = driverName,
+                        TrackingNumber = code, DispatchTime = dispatchDate.Value, Driver = driverName, BaseName = Get(cells, baseColumn).Trim(),
                         ProblemTime = ParseExcelDate(Get(cells, problem)), DeliveryTime = ParseExcelDate(Get(cells, delivery))
                     });
                 }
@@ -146,6 +147,105 @@ namespace MonitoramentoEntregas
         }
     }
 
+    internal static class ReportRenderer
+    {
+        private static readonly Color Red = Color.FromArgb(235, 0, 24);
+        private static readonly Color Grid = Color.FromArgb(190, 190, 190);
+
+        public static List<DriverSummary> Summarize(IEnumerable<DeliveryRecord> records)
+        {
+            return records.GroupBy(x => x.Driver, StringComparer.OrdinalIgnoreCase).Select(g => new DriverSummary {
+                Driver = g.Key,
+                Pending = g.Count(x => x.Status == DeliveryStatus.BaixaPendente),
+                Delivered = g.Count(x => x.Status == DeliveryStatus.Entregue),
+                Failed = g.Count(x => x.Status == DeliveryStatus.Insucesso),
+                Total = g.Count()
+            }).OrderBy(x => x.Driver, StringComparer.CurrentCultureIgnoreCase).ToList();
+        }
+
+        public static Bitmap Create(IEnumerable<DeliveryRecord> source, DateTime date)
+        {
+            List<DeliveryRecord> selected = source.Where(x => x.DispatchTime.Date == date.Date).ToList();
+            List<DriverSummary> drivers = Summarize(selected);
+            int total = selected.Count;
+            int delivered = selected.Count(x => x.Status == DeliveryStatus.Entregue);
+            int pending = selected.Count(x => x.Status == DeliveryStatus.BaixaPendente);
+            int failed = selected.Count(x => x.Status == DeliveryStatus.Insucesso);
+            double sla = total == 0 ? 0 : (double)delivered / total;
+            string baseName = selected.Select(x => x.BaseName).FirstOrDefault(x => !String.IsNullOrWhiteSpace(x)) ?? "ITU-SP";
+            int detailTop = 162, headerHeight = 35, rowHeight = 30;
+            int height = detailTop + headerHeight + (drivers.Count + 2) * rowHeight + 1;
+            Bitmap bitmap = new Bitmap(1200, height);
+            using (Graphics g = Graphics.FromImage(bitmap))
+            using (Font regular = new Font("Arial", 11))
+            using (Font bold = new Font("Arial", 11, FontStyle.Bold))
+            using (Font large = new Font("Arial", 16, FontStyle.Bold))
+            using (Pen border = new Pen(Grid))
+            {
+                g.Clear(Color.White); g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+                g.FillRectangle(new SolidBrush(Red), 0, 0, 500, 145);
+                DrawCentered(g, "J&T", new Font("Arial", 30, FontStyle.Bold | FontStyle.Italic), Brushes.White, new Rectangle(0, 34, 500, 72));
+                DrawCentered(g, "EXPRESS", bold, Brushes.White, new Rectangle(282, 78, 125, 28));
+                DrawHeaderCell(g, "DATA:", new Rectangle(500, 0, 155, 54), large, true);
+                DrawHeaderCell(g, date.ToString("dd/MM"), new Rectangle(655, 0, 205, 54), large, false);
+                DrawHeaderCell(g, "Horário", new Rectangle(860, 0, 190, 54), large, true);
+                DrawHeaderCell(g, DateTime.Now.ToString("HH:mm"), new Rectangle(1050, 0, 150, 54), large, false);
+                string[] metricHeaders = { "BAIXA PENDENTE", "ENTREGUE", "INSUCESSO", "EXPEDIDO", "TAXA BAIXA DE\nENTREGA" };
+                int[] metricX = { 500, 655, 755, 860, 960 }; int[] metricW = { 155, 100, 105, 100, 240 };
+                for (int i = 0; i < metricHeaders.Length; i++) DrawHeaderCell(g, metricHeaders[i], new Rectangle(metricX[i], 54, metricW[i], 52), bold, true);
+                int[] metricValues = { pending, delivered, failed, total };
+                for (int i = 0; i < 4; i++) DrawCentered(g, metricValues[i].ToString(), regular, Brushes.Black, new Rectangle(metricX[i], 106, metricW[i], 39));
+                DrawTraffic(g, sla, new Rectangle(960, 106, 240, 39), bold);
+
+                int[] x = { 0, 500, 655, 755, 860 }; int[] widths = { 500, 155, 100, 105, 100 };
+                string[] headers = { "MOTORISTA", "BAIXA PENDENTE", "ENTREGUE", "INSUCESSO", "Total geral" };
+                for (int i = 0; i < headers.Length; i++) DrawHeaderCell(g, headers[i], new Rectangle(x[i], detailTop, widths[i], headerHeight), bold, true);
+                DrawHeaderCell(g, "TAXA BAIXA DE\nENTREGA", new Rectangle(1035, detailTop, 165, headerHeight), bold, true);
+                int y = detailTop + headerHeight;
+                DrawDataRow(g, baseName, pending, delivered, failed, total, sla, y, rowHeight, bold, Color.FromArgb(255, 220, 220), true);
+                y += rowHeight;
+                foreach (DriverSummary driver in drivers)
+                {
+                    DrawDataRow(g, "     " + driver.Driver, driver.Pending, driver.Delivered, driver.Failed, driver.Total, driver.Sla, y, rowHeight, regular, Color.White, false);
+                    y += rowHeight;
+                }
+                DrawDataRow(g, "Total geral", pending, delivered, failed, total, sla, y, rowHeight, bold, Red, true);
+            }
+            return bitmap;
+        }
+
+        private static void DrawHeaderCell(Graphics g, string text, Rectangle rect, Font font, bool red)
+        {
+            g.FillRectangle(red ? new SolidBrush(Red) : Brushes.WhiteSmoke, rect); g.DrawRectangle(new Pen(Grid), rect);
+            DrawCentered(g, text, font, red ? Brushes.White : Brushes.Black, rect);
+        }
+        private static void DrawCentered(Graphics g, string text, Font font, Brush brush, Rectangle rect)
+        {
+            StringFormat format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+            g.DrawString(text, font, brush, rect, format);
+        }
+        private static void DrawDataRow(Graphics g, string name, int pending, int delivered, int failed, int total, double sla, int y, int height, Font font, Color fill, bool strong)
+        {
+            int[] x = { 0, 500, 655, 755, 860 }; int[] widths = { 500, 155, 100, 105, 100 }; int[] numbers = { pending, delivered, failed, total };
+            for (int i = 0; i < 5; i++) { g.FillRectangle(new SolidBrush(fill), x[i], y, widths[i], height); g.DrawRectangle(new Pen(Grid), x[i], y, widths[i], height); }
+            g.DrawString(name, font, strong && fill == Red ? Brushes.White : Brushes.Black, new Rectangle(4, y + 5, 492, height - 6));
+            for (int i = 1; i < 5; i++)
+            {
+                string text = numbers[i - 1] == 0 && fill == Color.White ? "" : numbers[i - 1].ToString();
+                StringFormat format = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center };
+                g.DrawString(text, font, strong && fill == Red ? Brushes.White : Brushes.Black, new Rectangle(x[i] + 3, y, widths[i] - 7, height), format);
+            }
+            DrawTraffic(g, sla, new Rectangle(1035, y, 165, height), font);
+        }
+        private static void DrawTraffic(Graphics g, double sla, Rectangle rect, Font font)
+        {
+            Color color = sla >= .98 ? Color.FromArgb(99, 169, 148) : sla >= .95 ? Color.FromArgb(237, 196, 112) : Color.FromArgb(211, 77, 44);
+            g.FillEllipse(new SolidBrush(color), rect.X + 8, rect.Y + (rect.Height - 16) / 2, 16, 16);
+            g.DrawEllipse(Pens.Gray, rect.X + 8, rect.Y + (rect.Height - 16) / 2, 16, 16);
+            g.DrawString(sla.ToString("P2", CultureInfo.GetCultureInfo("pt-BR")), font, Brushes.Black, new Rectangle(rect.X + 34, rect.Y, rect.Width - 34, rect.Height), new StringFormat { LineAlignment = StringAlignment.Center });
+        }
+    }
+
     internal sealed class MainForm : Form
     {
         private readonly Label fileLabel = new Label();
@@ -168,7 +268,9 @@ namespace MonitoramentoEntregas
             Controls.Add(new Label { Text = "Data:", AutoSize = true, Location = new Point(204, 107) });
             datePicker.Format = DateTimePickerFormat.Short; datePicker.Location = new Point(250, 103); datePicker.Width = 120; datePicker.ValueChanged += delegate { RefreshDashboard(); }; Controls.Add(datePicker);
             exportButton.Text = "Exportar CSV"; exportButton.Location = new Point(385, 102); exportButton.Size = new Size(120, 32); exportButton.Enabled = false; exportButton.Click += ExportCsv; Controls.Add(exportButton);
-            fileLabel.Location = new Point(520, 104); fileLabel.Size = new Size(480, 28); fileLabel.ForeColor = Color.FromArgb(75, 85, 99); fileLabel.AutoEllipsis = true; Controls.Add(fileLabel);
+            Button imageButton = new Button { Text = "Salvar imagem", Location = new Point(515, 102), Size = new Size(125, 32) }; imageButton.Click += SaveImage; Controls.Add(imageButton);
+            Button copyButton = new Button { Text = "Copiar imagem", Location = new Point(650, 102), Size = new Size(125, 32) }; copyButton.Click += CopyImage; Controls.Add(copyButton);
+            fileLabel.Location = new Point(790, 104); fileLabel.Size = new Size(210, 28); fileLabel.ForeColor = Color.FromArgb(75, 85, 99); fileLabel.AutoEllipsis = true; Controls.Add(fileLabel);
             string[] cardTitles = { "TOTAL EXPEDIDO", "ENTREGUES", "BAIXAS PENDENTES", "INSUCESSOS", "SLA DO DIA" };
             for (int i = 0; i < 5; i++)
             {
@@ -200,13 +302,39 @@ namespace MonitoramentoEntregas
         private void RefreshDashboard()
         {
             List<DeliveryRecord> selected = records.Where(x => x.DispatchTime.Date == datePicker.Value.Date).ToList();
-            summary = selected.GroupBy(x => x.Driver, StringComparer.OrdinalIgnoreCase).Select(g => new DriverSummary {
-                Driver = g.Key, Pending = g.Count(x => x.Status == DeliveryStatus.BaixaPendente), Delivered = g.Count(x => x.Status == DeliveryStatus.Entregue), Failed = g.Count(x => x.Status == DeliveryStatus.Insucesso), Total = g.Count()
-            }).OrderByDescending(x => x.Sla).ThenBy(x => x.Driver).ToList();
+            summary = ReportRenderer.Summarize(selected);
             int total = selected.Count, delivered = selected.Count(x => x.Status == DeliveryStatus.Entregue), pending = selected.Count(x => x.Status == DeliveryStatus.BaixaPendente), failed = selected.Count(x => x.Status == DeliveryStatus.Insucesso);
             CultureInfo pt = CultureInfo.GetCultureInfo("pt-BR");
             values[0].Text = total.ToString("N0", pt); values[1].Text = delivered.ToString("N0", pt); values[2].Text = pending.ToString("N0", pt); values[3].Text = failed.ToString("N0", pt); values[4].Text = (total == 0 ? 0 : (double)delivered / total).ToString("P1", pt);
-            grid.Rows.Clear(); foreach (DriverSummary item in summary) grid.Rows.Add(item.Driver, item.Pending, item.Delivered, item.Failed, item.Total, item.Sla); exportButton.Enabled = summary.Count > 0;
+            grid.Rows.Clear();
+            if (total > 0)
+            {
+                string baseName = selected.Select(x => x.BaseName).FirstOrDefault(x => !String.IsNullOrWhiteSpace(x)) ?? "ITU-SP";
+                int top = grid.Rows.Add(baseName, pending, delivered, failed, total, total == 0 ? 0 : (double)delivered / total);
+                grid.Rows[top].DefaultCellStyle.BackColor = Color.FromArgb(255, 220, 220); grid.Rows[top].DefaultCellStyle.Font = new Font("Segoe UI Semibold", 10);
+                foreach (DriverSummary item in summary) grid.Rows.Add("     " + item.Driver, item.Pending == 0 ? (object)"" : item.Pending, item.Delivered == 0 ? (object)"" : item.Delivered, item.Failed == 0 ? (object)"" : item.Failed, item.Total, item.Sla);
+                int last = grid.Rows.Add("Total geral", pending, delivered, failed, total, total == 0 ? 0 : (double)delivered / total);
+                grid.Rows[last].DefaultCellStyle.BackColor = Color.FromArgb(235, 0, 24); grid.Rows[last].DefaultCellStyle.ForeColor = Color.White; grid.Rows[last].DefaultCellStyle.Font = new Font("Segoe UI Semibold", 10);
+            }
+            exportButton.Enabled = summary.Count > 0;
+        }
+
+        private void SaveImage(object sender, EventArgs e)
+        {
+            if (records.Count == 0) { MessageBox.Show(this, "Selecione uma planilha primeiro.", "Imagem", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
+            using (SaveFileDialog dialog = new SaveFileDialog { Filter = "Imagem PNG (*.png)|*.png", FileName = "Monitoramento_" + datePicker.Value.ToString("yyyy-MM-dd") + ".png" })
+            {
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                using (Bitmap image = ReportRenderer.Create(records, datePicker.Value)) image.Save(dialog.FileName, System.Drawing.Imaging.ImageFormat.Png);
+                MessageBox.Show(this, "Imagem pronta para enviar no WhatsApp.", "Imagem salva", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+        }
+
+        private void CopyImage(object sender, EventArgs e)
+        {
+            if (records.Count == 0) { MessageBox.Show(this, "Selecione uma planilha primeiro.", "Imagem", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
+            using (Bitmap image = ReportRenderer.Create(records, datePicker.Value)) Clipboard.SetImage((Bitmap)image.Clone());
+            MessageBox.Show(this, "Imagem copiada. Agora é só colar no WhatsApp.", "Imagem copiada", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         private void ExportCsv(object sender, EventArgs e)
@@ -222,7 +350,7 @@ namespace MonitoramentoEntregas
 
         private void ConfigureGrid()
         {
-            grid.Location = new Point(24, 270); grid.Size = new Size(980, 330); grid.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right; grid.BackgroundColor = Color.White; grid.BorderStyle = BorderStyle.None; grid.AllowUserToAddRows = false; grid.AllowUserToDeleteRows = false; grid.ReadOnly = true; grid.RowHeadersVisible = false; grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill; grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect; grid.EnableHeadersVisualStyles = false; grid.ColumnHeadersDefaultCellStyle.BackColor = Color.FromArgb(31, 78, 121); grid.ColumnHeadersDefaultCellStyle.ForeColor = Color.White; grid.ColumnHeadersHeight = 38; grid.RowTemplate.Height = 30; grid.AlternatingRowsDefaultCellStyle.BackColor = Color.FromArgb(248, 250, 252);
+            grid.Location = new Point(24, 270); grid.Size = new Size(980, 330); grid.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right; grid.BackgroundColor = Color.White; grid.BorderStyle = BorderStyle.None; grid.AllowUserToAddRows = false; grid.AllowUserToDeleteRows = false; grid.ReadOnly = true; grid.RowHeadersVisible = false; grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill; grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect; grid.EnableHeadersVisualStyles = false; grid.ColumnHeadersDefaultCellStyle.BackColor = Color.FromArgb(235, 0, 24); grid.ColumnHeadersDefaultCellStyle.ForeColor = Color.White; grid.ColumnHeadersHeight = 38; grid.RowTemplate.Height = 30; grid.AlternatingRowsDefaultCellStyle.BackColor = Color.FromArgb(248, 250, 252);
             grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Motorista", FillWeight = 240 }); grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Baixa pendente", FillWeight = 90 }); grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Entregue", FillWeight = 80 }); grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Insucesso", FillWeight = 80 }); grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Total expedido", FillWeight = 90 }); grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "SLA", FillWeight = 80, DefaultCellStyle = new DataGridViewCellStyle { Format = "P1", Alignment = DataGridViewContentAlignment.MiddleRight } });
         }
     }
@@ -241,6 +369,13 @@ namespace MonitoramentoEntregas
                 int failed = selected.Count(x => x.Status == DeliveryStatus.Insucesso);
                 int pending = selected.Count(x => x.Status == DeliveryStatus.BaixaPendente);
                 Console.WriteLine(String.Format(CultureInfo.InvariantCulture, "date={0:yyyy-MM-dd};total={1};delivered={2};failed={3};pending={4};sla={5:F6};drivers={6}", date, selected.Count, delivered, failed, pending, selected.Count == 0 ? 0 : (double)delivered / selected.Count, selected.Select(x => x.Driver).Distinct(StringComparer.OrdinalIgnoreCase).Count()));
+                return;
+            }
+            if (args.Length == 3 && args[0] == "--render")
+            {
+                List<DeliveryRecord> records = XlsxReader.ReadDeliveries(args[1]);
+                DateTime date = records.Max(x => x.DispatchTime.Date);
+                using (Bitmap image = ReportRenderer.Create(records, date)) image.Save(args[2], System.Drawing.Imaging.ImageFormat.Png);
                 return;
             }
             Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false); Application.Run(new MainForm());
