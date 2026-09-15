@@ -3,3 +3,4 @@ electron-app/dist*/
 *.exe
 preview-whatsapp.png
 *.log
+*.lnk

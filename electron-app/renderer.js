@@ -33,7 +33,7 @@ function render() {
   const slaRows = drivers.map(item => `<tr><td>${traffic(item.sla)}</td></tr>`).join('');
   $('#report').innerHTML = `
     <div class="top">
-      <div class="brand"><div class="brand-mark"><span class="brand-main">J&amp;T</span><span class="brand-sub">EXPRESS</span></div></div>
+      <div class="brand"><img class="report-logo" src="assets/report-logo.png" alt="J&amp;T Express"></div>
       <div class="top-right">
         <div class="top-info"><div class="cell head info-head">DATA:</div><div class="cell info-value">${day}/${month}</div><div class="cell head info-head">Horário</div><div class="cell info-value">${time}</div></div>
         <div class="top-metrics"><div class="cell head metric-head">BAIXA PENDENTE</div><div class="cell head metric-head">ENTREGUE</div><div class="cell head metric-head">INSUCESSO</div><div class="cell head metric-head">EXPEDIDO</div><div class="cell head metric-head">TAXA BAIXA DE<br>ENTREGA</div></div>

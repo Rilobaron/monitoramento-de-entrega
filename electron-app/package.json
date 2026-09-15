@@ -19,8 +19,8 @@
     "productName": "Monitoramento de Entregas",
     "asar": false,
     "compression": "store",
-    "files": ["main.js", "preload.js", "index.html", "renderer.js", "package.json"],
+    "files": ["main.js", "preload.js", "index.html", "renderer.js", "assets/**/*", "package.json"],
     "directories": { "output": "dist" },
-    "win": { "target": "portable", "artifactName": "Monitoramento de Entregas.exe", "signAndEditExecutable": false }
+    "win": { "target": "portable", "artifactName": "Monitoramento de Entregas.exe", "icon": "assets/icon.ico", "signAndEditExecutable": false }
   }
 }
