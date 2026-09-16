@@ -113,14 +113,22 @@ ipcMain.handle('load-latest-workbook', async () => {
 });
 
 ipcMain.handle('capture-report', async (_event, options) => {
-  const image = await mainWindow.webContents.capturePage(options.rect);
+  let image;
+  if (options.dataUrl) {
+    image = nativeImage.createFromDataURL(options.dataUrl);
+  } else if (options.rect) {
+    image = await mainWindow.webContents.capturePage(options.rect);
+  }
+  if (!image || image.isEmpty()) {
+    throw new Error('Não foi possível gerar a imagem.');
+  }
   if (options.mode === 'copy') {
     clipboard.writeImage(image);
     return { copied: true };
   }
   const result = await dialog.showSaveDialog(mainWindow, {
     title: 'Salvar imagem para WhatsApp',
-    defaultPath: `Monitoramento_${options.date}.png`,
+    defaultPath: `Monitoramento_${options.date || 'relatorio'}.png`,
     filters: [{ name: 'Imagem PNG', extensions: ['png'] }]
   });
   if (result.canceled) return null;
